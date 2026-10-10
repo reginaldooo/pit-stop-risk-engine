@@ -629,7 +629,11 @@ with tab4:
         st.warning("MARGINAL")
         st.markdown("0 < net ≤ 5s — emerged ahead, razor-thin. Any hesitation would have cost position.")
     with col3:
-        st.markdown("🟠 **RISKY**")
+        st.markdown(
+            '<div style="background-color:rgba(255,136,0,0.15);border-left:4px solid #FF8800;'
+            'padding:0.6rem 1rem;border-radius:0.25rem;color:#FF8800;font-weight:700;">🟠 RISKY</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown("net ≤ 0, but gap covered ≥50% of total cost. The window was close — rival likely pits to neutralise.")
     with col4:
         st.error("CRITICAL")
