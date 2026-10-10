@@ -23,15 +23,16 @@ RADIO_WINDOW_SECONDS = 120
 def score_stop(gap: Optional[float], pit_duration: float) -> str:
     if gap is None or pd.isna(gap):
         return "UNKNOWN"
-    threshold = pit_duration + PIT_LANE_TIME_EST
-    if gap > threshold + SAFE_BUFFER:
+    net = gap - (pit_duration + PIT_LANE_TIME_EST)
+    if net > SAFE_BUFFER:
         return "SAFE"
-    if gap > 0:
+    if net > 0:
         return "MARGINAL"
     return "DANGEROUS"
 
 
-def compound_for_stop(lap: int, driver: int, session: int, stints: pd.DataFrame) -> Optional[str]:
+def stint_for_stop(lap: int, driver: int, session: int, stints: pd.DataFrame) -> dict:
+    """Returns compound and tyre_age_at_entry for a given pit stop lap."""
     driver_stints = stints[
         (stints["session_key"] == session) & (stints["driver_number"] == driver)
     ]
@@ -39,8 +40,14 @@ def compound_for_stop(lap: int, driver: int, session: int, stints: pd.DataFrame)
         (driver_stints["lap_start"] <= lap) & (driver_stints["lap_end"] >= lap)
     ]
     if match.empty:
-        return None
-    return str(match.iloc[0]["compound"])
+        return {"compound": None, "tyre_age_at_entry": None}
+    row = match.iloc[0]
+    age_at_start = row.get("tyre_age_at_start", 0) or 0
+    laps_into_stint = lap - int(row.get("lap_start", lap))
+    return {
+        "compound": str(row["compound"]),
+        "tyre_age_at_entry": int(age_at_start) + laps_into_stint,
+    }
 
 
 def nearest_radio(
@@ -114,7 +121,7 @@ def gap_to_car_behind(
             if not behind_intervals.empty:
                 gap = _parse_gap(behind_intervals.iloc[-1].get("interval"))
                 if gap is not None:
-                    return gap, "exact"
+                    return gap, "Measured"
 
     # Fallback: pitting driver's own interval
     own_intervals = session_ivl[
@@ -124,10 +131,10 @@ def gap_to_car_behind(
 
     if not own_intervals.empty:
         gap = _parse_gap(own_intervals.iloc[-1].get("interval"))
-        if gap is not None:
-            return gap, "fallback"
+        if gap is not None and gap > 0:  # gap=0 means race leader, not a real gap
+            return gap, "Estimated"
 
-    return None, "unknown"
+    return None, "No data"
 
 
 def build_risk_scores(
@@ -164,7 +171,7 @@ def build_risk_scores(
         )
 
         risk = score_stop(gap, pit_duration)
-        compound = compound_for_stop(
+        stint_info = stint_for_stop(
             int(lap) if not pd.isna(lap) else 0, int(driver), session, stints
         )
         radio_url = nearest_radio(stop_time, int(driver), session, radio) if risk == "DANGEROUS" else None
@@ -175,12 +182,14 @@ def build_risk_scores(
             "driver_number": driver,
             "driver_acronym": stop.get("driver_acronym", str(driver)),
             "team_name": stop.get("team_name", "Unknown"),
+            "team_colour": stop.get("team_colour", None),
             "lap_number": lap,
             "pit_duration": round(float(pit_duration), 3),
             "gap_at_entry": round(gap, 3) if gap is not None else None,
             "gap_method": gap_method,
             "risk_score": risk,
-            "compound": compound,
+            "compound": stint_info["compound"],
+            "tyre_age_at_entry": stint_info["tyre_age_at_entry"],
             "radio_url": radio_url,
         })
 
@@ -210,10 +219,12 @@ if __name__ == "__main__":
         print(risk_df["risk_score"].value_counts().to_string())
         print("\nGap method distribution:")
         print(risk_df["gap_method"].value_counts().to_string())
-        exact_pct = (risk_df["gap_method"] == "exact").mean() * 100
+        exact_pct = (risk_df["gap_method"] == "Measured").mean() * 100
         print(f"\nExact gap coverage: {exact_pct:.1f}%")
         dangerous_with_radio = risk_df[
             (risk_df["risk_score"] == "DANGEROUS") & (risk_df["radio_url"].notna())
         ]
         print(f"Dangerous stops with radio clip: {len(dangerous_with_radio)}")
+        print("\nAvg tyre age at pit entry by compound:")
+        print(risk_df.groupby("compound")["tyre_age_at_entry"].mean().round(1).to_string())
         print(f"\nSaved risk_scores_{year}.csv")

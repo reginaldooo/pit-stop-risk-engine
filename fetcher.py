@@ -57,8 +57,13 @@ def fetch_sessions(year: int) -> pd.DataFrame:
 def fetch_drivers(session_key: int) -> pd.DataFrame:
     data = cached_fetch(f"{session_key}_drivers", "drivers", {"session_key": session_key})
     df = pd.DataFrame(data)
-    cols = ["driver_number", "full_name", "name_acronym", "team_name"]
+    cols = ["driver_number", "full_name", "name_acronym", "team_name", "team_colour", "headshot_url", "broadcast_name"]
     return df[[c for c in cols if c in df.columns]]
+
+
+def fetch_weather(session_key: int) -> pd.DataFrame:
+    data = cached_fetch(f"{session_key}_weather", "weather", {"session_key": session_key})
+    return pd.DataFrame(data) if data else pd.DataFrame()
 
 
 def fetch_pit_stops(session_key: int) -> pd.DataFrame:
@@ -98,7 +103,8 @@ def build_dataset(year: int, dry_run: bool = False) -> None:
     if dry_run:
         print(f"[dry-run] Sampling {len(session_sample)} sessions only")
 
-    all_pits, all_positions, all_intervals, all_stints, all_radio = [], [], [], [], []
+    all_pits, all_positions, all_intervals, all_stints, all_radio, all_weather = [], [], [], [], [], []
+    all_drivers = []
 
     for i, (_, session) in enumerate(session_sample.iterrows(), 1):
         key = int(session["session_key"])
@@ -110,8 +116,10 @@ def build_dataset(year: int, dry_run: bool = False) -> None:
             driver_map = {}
         else:
             driver_map = drivers.set_index("driver_number")[
-                [c for c in ["full_name", "name_acronym", "team_name"] if c in drivers.columns]
+                [c for c in ["full_name", "name_acronym", "team_name", "team_colour", "headshot_url"] if c in drivers.columns]
             ].to_dict("index")
+            drivers["session_key"] = key
+            all_drivers.append(drivers)
 
         pits = fetch_pit_stops(key)
         if not pits.empty:
@@ -122,6 +130,9 @@ def build_dataset(year: int, dry_run: bool = False) -> None:
             )
             pits["driver_acronym"] = pits["driver_number"].map(
                 lambda d: driver_map.get(d, {}).get("name_acronym", str(d))
+            )
+            pits["team_colour"] = pits["driver_number"].map(
+                lambda d: driver_map.get(d, {}).get("team_colour", None)
             )
             all_pits.append(pits)
             print(f"    {len(pits)} pit stops")
@@ -147,6 +158,12 @@ def build_dataset(year: int, dry_run: bool = False) -> None:
             radio["circuit"] = name
             all_radio.append(radio)
 
+        weather = fetch_weather(key)
+        if not weather.empty:
+            weather["session_key"] = key
+            weather["circuit"] = name
+            all_weather.append(weather)
+
     def save(frames: list, filename: str) -> None:
         if not frames:
             print(f"  No data for {filename}")
@@ -160,6 +177,8 @@ def build_dataset(year: int, dry_run: bool = False) -> None:
     save(all_intervals, f"intervals_{year}.csv")
     save(all_stints, f"stints_{year}.csv")
     save(all_radio, f"team_radio_{year}.csv")
+    save(all_weather, f"weather_{year}.csv")
+    save(all_drivers, f"drivers_{year}.csv")
 
     print(f"\nStep 1 complete — {year} data cached to data/")
 
