@@ -331,6 +331,12 @@ with tab2:
                 xaxis_title="Lap Number",
                 yaxis_title="Stop Duration (s)",
                 legend_title=color_by,
+                hoverlabel=dict(
+                    bgcolor="white",
+                    font_color="black",
+                    font_size=13,
+                    bordercolor="#cccccc",
+                ),
             )
             st.plotly_chart(fig, use_container_width=True)
 

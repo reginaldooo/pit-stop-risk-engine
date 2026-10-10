@@ -143,6 +143,21 @@ The 270-second settled window is the established standard in F1 analytics (FastF
 
 ---
 
+## Charts & Visualisation Decisions
+
+All charts use [Plotly](https://plotly.com/python/) via `plotly.express` and `plotly.graph_objects`. Every chart renders with `use_container_width=True` for responsive layout.
+
+| Chart | Type | Location | Why this chart |
+|---|---|---|---|
+| **Median Stop Duration** | Bar (`px.bar`) | Tab 1 | One metric compared across multiple teams. Sorted fastest-to-slowest for immediate rank readability. Y-axis starts at 20s so the 1–2s competitive gap is visible rather than compressed. |
+| **Stop Duration Distribution** | Box plot (`px.box`) | Tab 1 | The median alone hides reliability. A box plot exposes spread and outliers in one view — a narrow box means a consistent crew; a wide one with outliers means slow stops happen unpredictably. Stops over 120s (red flag / drive-through) are excluded. |
+| **Tyre Compound Usage** | Stacked bar (`px.bar`, `barmode="stack"`) | Tab 1 | Composition chart — shows how each team splits its stops across compounds. A stacked bar makes proportion visible without requiring the reader to do mental arithmetic. |
+| **Race Pit Stop Timeline** | Scatter (`go.Scatter`) | Tab 2 | Each dot is one stop. X = lap number (time), Y = stop duration (execution), colour = risk category. Three variables readable at once. Hover reveals the full stop record. Two colour modes: risk view and compound view with risk-coloured border. |
+
+**Colour encoding:** Team colours are pulled directly from the OpenF1 `/drivers` endpoint (official F1 hex values) and applied consistently to every chart that breaks down by team.
+
+---
+
 ## Backend Architecture
 
 ```
