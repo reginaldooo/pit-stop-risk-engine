@@ -1,6 +1,17 @@
 """
 Step 2c — Pit Window Risk Scoring
-Scores each pit stop as SAFE / MARGINAL / DANGEROUS based on gap at pit entry.
+Scores each pit stop as SAFE / MARGINAL / RISKY / CRITICAL based on gap at pit entry.
+
+OpenF1 pit_duration is the full entry-to-exit time (~22-25s), so we do NOT add
+a generic traversal constant. We add only a small circuit-specific in/out-lap
+penalty (2-5s) for the marginal time lost beyond the measured stop.
+
+Risk categories:
+  SAFE      — net > +5s   (emerged ahead with comfortable margin)
+  MARGINAL  — 0 < net ≤ 5s (emerged ahead, razor-thin)
+  RISKY     — net ≤ 0 AND gap covers ≥50% of total cost
+  CRITICAL  — net ≤ 0 AND gap covers <50% of total cost
+  UNKNOWN   — no gap data
 
 Gap method (fixed): find the car directly behind the pitting driver at pit entry
 time, then read *that* car's interval — the true gap the crew is racing against.
@@ -15,20 +26,77 @@ from typing import Optional
 import pandas as pd
 
 DATA_DIR = Path(__file__).parent / "data"
-PIT_LANE_TIME_EST = 20.0
 SAFE_BUFFER = 5.0
 RADIO_WINDOW_SECONDS = 120
 
+# Extra seconds beyond pit_duration lost on in/out laps (circuit-specific).
+# pit_duration already covers full traversal; these account for additional
+# time lost due to circuit layout (pit lane entry/exit speed restrictions).
+CIRCUIT_EXTRA_DEFAULT = 3.0
+_CIRCUIT_EXTRA_MAP = {
+    "spa": 1.5,
+    "francorchamps": 1.5,
+    "zandvoort": 2.0,
+    "montreal": 2.0,
+    "miami": 2.5,
+    "austria": 2.5,
+    "spielberg": 2.5,
+    "silverstone": 2.5,
+    "monaco": 4.0,
+    "singapore": 4.5,
+    "baku": 4.0,
+    "imola": 4.0,
+    "lusail": 3.5,
+    "qatar": 3.5,
+    "bahrain": 2.0,
+    "sakhir": 2.0,
+    "jeddah": 2.5,
+    "saudi": 2.5,
+    "albert_park": 2.5,
+    "melbourne": 2.5,
+    "suzuka": 2.5,
+    "shanghai": 2.5,
+    "china": 2.5,
+    "barcelona": 2.5,
+    "spain": 2.5,
+    "hungaroring": 3.0,
+    "budapest": 3.0,
+    "monza": 2.0,
+    "italy": 2.0,
+    "austin": 2.5,
+    "cota": 2.5,
+    "mexico": 3.0,
+    "interlagos": 3.5,
+    "brazil": 3.5,
+    "vegas": 2.0,
+    "las_vegas": 2.0,
+    "abu_dhabi": 2.5,
+    "yas": 2.5,
+}
 
-def score_stop(gap: Optional[float], pit_duration: float) -> str:
+
+def circuit_extra(circuit: str) -> float:
+    c = (circuit or "").lower().replace(" ", "_")
+    for key, val in _CIRCUIT_EXTRA_MAP.items():
+        if key in c:
+            return val
+    return CIRCUIT_EXTRA_DEFAULT
+
+
+def score_stop(gap: Optional[float], pit_duration: float, circuit: str = "") -> str:
     if gap is None or pd.isna(gap):
         return "UNKNOWN"
-    net = gap - (pit_duration + PIT_LANE_TIME_EST)
+    extra = circuit_extra(circuit)
+    total_cost = pit_duration + extra
+    net = gap - total_cost
     if net > SAFE_BUFFER:
         return "SAFE"
     if net > 0:
         return "MARGINAL"
-    return "DANGEROUS"
+    coverage = gap / total_cost if total_cost > 0 else 0
+    if coverage >= 0.5:
+        return "RISKY"
+    return "CRITICAL"
 
 
 def stint_for_stop(lap: int, driver: int, session: int, stints: pd.DataFrame) -> dict:
@@ -170,11 +238,16 @@ def build_risk_scores(
             stop_time, int(driver), session, positions, intervals
         )
 
-        risk = score_stop(gap, pit_duration)
+        circuit_name = str(stop.get("circuit", "") or "")
+        risk = score_stop(gap, pit_duration, circuit_name)
         stint_info = stint_for_stop(
             int(lap) if not pd.isna(lap) else 0, int(driver), session, stints
         )
-        radio_url = nearest_radio(stop_time, int(driver), session, radio) if risk == "DANGEROUS" else None
+        radio_url = (
+            nearest_radio(stop_time, int(driver), session, radio)
+            if risk in ("RISKY", "CRITICAL")
+            else None
+        )
 
         results.append({
             "session_key": session,
@@ -221,10 +294,10 @@ if __name__ == "__main__":
         print(risk_df["gap_method"].value_counts().to_string())
         exact_pct = (risk_df["gap_method"] == "Measured").mean() * 100
         print(f"\nExact gap coverage: {exact_pct:.1f}%")
-        dangerous_with_radio = risk_df[
-            (risk_df["risk_score"] == "DANGEROUS") & (risk_df["radio_url"].notna())
+        high_risk_with_radio = risk_df[
+            risk_df["risk_score"].isin(["RISKY", "CRITICAL"]) & risk_df["radio_url"].notna()
         ]
-        print(f"Dangerous stops with radio clip: {len(dangerous_with_radio)}")
+        print(f"RISKY/CRITICAL stops with radio clip: {len(high_risk_with_radio)}")
         print("\nAvg tyre age at pit entry by compound:")
         print(risk_df.groupby("compound")["tyre_age_at_entry"].mean().round(1).to_string())
         print(f"\nSaved risk_scores_{year}.csv")

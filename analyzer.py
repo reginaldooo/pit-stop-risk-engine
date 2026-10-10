@@ -9,6 +9,7 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).parent / "data"
 OUTLIER_THRESHOLD = 30.0  # seconds (total pit lane time; >30s = slow stop)
+SETTLE_SECONDS = 270  # ~3 laps at 90s avg — standard F1 analytics window (FastF1/Agastya Bassi)
 
 
 def load_data(year: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -65,7 +66,13 @@ def position_delta_per_stop(pit: pd.DataFrame, pos: pd.DataFrame) -> pd.DataFram
     for _, stop in pit.iterrows():
         session = stop["session_key"]
         driver = stop["driver_number"]
-        stop_time = stop["date"]
+        pit_entry_time = stop["date"]
+        pit_duration = stop.get("pit_duration")
+
+        if pd.isna(pit_duration) or pit_duration <= 0:
+            continue
+
+        pit_exit_time = pit_entry_time + pd.Timedelta(seconds=float(pit_duration))
 
         driver_pos = pos[
             (pos["session_key"] == session) & (pos["driver_number"] == driver)
@@ -74,16 +81,26 @@ def position_delta_per_stop(pit: pd.DataFrame, pos: pd.DataFrame) -> pd.DataFram
         if driver_pos.empty:
             continue
 
-        before = driver_pos[driver_pos["date"] < stop_time]
-        after = driver_pos[driver_pos["date"] > stop_time]
+        # Stable position before pit: last reading ≥60s before entry avoids in-lap noise
+        before = driver_pos[driver_pos["date"] <= pit_entry_time - pd.Timedelta(seconds=60)]
+        pos_before = int(before.iloc[-1]["position"]) if not before.empty else None
 
-        pos_before = int(before["position"].iloc[-1]) if not before.empty else None
-        pos_after = int(after["position"].iloc[0]) if not after.empty else None
+        # Immediate position: first reading after pit exit (traffic effect visible)
+        after_all = driver_pos[driver_pos["date"] > pit_exit_time]
+        pos_after_immediate = int(after_all.iloc[0]["position"]) if not after_all.empty else None
 
-        if pos_before is None or pos_after is None:
+        # Settled position: ~3 laps after exit, tyre advantage registered, traffic cleared
+        after_settled = driver_pos[
+            driver_pos["date"] >= pit_exit_time + pd.Timedelta(seconds=SETTLE_SECONDS)
+        ]
+        pos_after_settled = int(after_settled.iloc[0]["position"]) if not after_settled.empty else None
+
+        if pos_before is None or pos_after_immediate is None:
             continue
 
-        delta = pos_after - pos_before  # positive = lost places, negative = gained
+        delta_immediate = pos_after_immediate - pos_before
+        delta_settled = (pos_after_settled - pos_before) if pos_after_settled is not None else None
+        final_position = int(driver_pos.iloc[-1]["position"])
 
         results.append({
             "session_key": session,
@@ -92,15 +109,18 @@ def position_delta_per_stop(pit: pd.DataFrame, pos: pd.DataFrame) -> pd.DataFram
             "driver_acronym": stop.get("driver_acronym", str(driver)),
             "team_name": stop.get("team_name", "Unknown"),
             "lap_number": stop.get("lap_number"),
-            "pit_duration": stop.get("pit_duration"),
+            "pit_duration": pit_duration,
             "position_before": pos_before,
-            "position_after": pos_after,
-            "position_delta": delta,
+            "position_after": pos_after_immediate,
+            "position_delta": delta_immediate,
+            "position_settled": pos_after_settled,
+            "delta_settled": delta_settled,
+            "final_position": final_position,
         })
 
     df = pd.DataFrame(results)
     if not df.empty:
-        df = df.sort_values("position_delta", ascending=False).reset_index(drop=True)
+        df = df.sort_values("delta_settled", ascending=False, na_position="last").reset_index(drop=True)
     return df
 
 

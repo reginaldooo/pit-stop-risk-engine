@@ -40,26 +40,26 @@ Answers: *in this specific race, which stops were risky and when did they happen
 | Section | What it shows |
 |---|---|
 | **Race selector** | Dropdown to select any race from the loaded season. |
-| **Color by toggle** | Switch between Risk view (green/yellow/red dots) and Compound view (tyre colour dots with risk-coloured border). |
+| **Color by toggle** | Switch between Risk view (green/yellow/orange/red dots) and Compound view (tyre colour dots with risk-coloured border). |
 | **Scatter plot** | Each dot = one pit stop. X axis = lap number, Y axis = stop duration in seconds. Hover for driver, team, compound, tyre age, gap at entry, gap source, and risk score. |
 | **Weather annotations** | If rainfall was detected during the race, a blue label appears on the chart. Average track temperature shown in the top-right corner. |
-| **Metrics row** | Total stops · Dangerous count · Marginal count for the selected race. |
-| **Radio clip cards** | Dangerous stops with a radio recording display as cards (3 per row): driver headshot · name · team · lap · compound · gap vs lane time · net gap verdict · audio player. Label notes the clip may not be about the stop. |
+| **Metrics row** | Total stops · Critical count · Risky count · Marginal count for the selected race. |
+| **Radio clip cards** | RISKY/CRITICAL stops with a radio recording display as cards (3 per row): driver headshot · name · team · lap · compound · gap vs stop duration · net gap verdict · audio player. Label notes the clip may not be about the stop. |
 | **Detail table** | Driver · Team · Lap · Stop (s) · Compound · Tyre Age · Gap Behind (s) · Gap Source · Risk. All headers have hover tooltips. |
 
 ---
 
 ### Tab 3 — Costliest Stops
 
-Answers: *which stops actually cost positions, and who was involved?*
+Answers: *which stops actually cost positions, who was involved, and did the risk pay off?*
 
 | Section | What it shows |
 |---|---|
-| **Metric cards** | Most Dangerous Team (highest dangerous stop count) · Safe Stop Rate (% of stops with net > +5s) · Median Stop Duration across all stops. |
-| **Top 10 positions lost — card grid** | 3-per-row cards: driver headshot · name · team · circuit · lap · stop duration · compound · positions lost · risk score. |
-| **Top 10 worst stops table** | Race · Driver · Team · Lap · Stop (s) · Pos Before · Pos After · Δ Positions · Compound · Risk. All headers have hover tooltips. |
-| **Radio clip cards** | Same 3-per-row card layout as Tab 2, with positions lost added to the story. Only appears if matching radio clips exist. |
-| **Top 10 positions gained table** | Counterpart to the worst stops — undercuts and well-timed stops that gained places. |
+| **Metric cards** | Most Dangerous Team (highest RISKY + CRITICAL stop count) · Safe Stop Rate (% of stops with net > +5s) · Median Stop Duration across all stops. |
+| **Top 10 — Most Positions Lost (leaderboard)** | Ranked by **Cost Score**. One row per stop: rank badge (🥇🥈🥉) · headshot · Driver + risk dot · Race · Stop duration + compound · Pos Before · Δ Immediate · Δ Settled · Cost Score. Column guide expander above the table explains every column. |
+| **Cost Score** | `Δ Settled − expected_Δ_Settled[risk_level]`. The season average Δ Settled for each risk level (SAFE / MARGINAL / DANGEROUS) is the baseline. A DANGEROUS stop normally loses ~1–2 places and recovers — a Cost Score of +10 means 10 extra places were lost beyond that baseline. These are the stops the strategy team truly got wrong, not just the ones that followed the expected pit lane pattern. |
+| **Radio clip cards** | 3-per-row cards for dangerous stops with a recorded radio clip: headshot · driver · team · lap · compound · net gap verdict · positions lost (settled) · audio player. Label notes the clip may not be about the stop. |
+| **Top 10 — Most Positions Gained** | Best undercuts and overcutts of the season. Columns: Race · Driver · Team · Lap · Stop (s) · Pos Before · Pos After (pit exit) · Δ Immediate · Pos Settled (~3 laps) · Δ Settled · **Final Pos**. Final Pos shows the driver's position at the end of the race — answers whether the gain held to the flag. |
 
 ---
 
@@ -72,6 +72,8 @@ Full in-app guide covering:
 - SAFE / MARGINAL / DANGEROUS / UNKNOWN definitions with exact thresholds
 - Why ~95% of stops score DANGEROUS (the strategic context)
 - How gap is measured — Measured (from car behind) vs. Estimated (driver's own interval)
+- How position delta is measured — why pit ENTRY readings are misleading, and the two-window approach (Δ Immediate after pit exit + Δ Settled ~3 laps later)
+- Cost Score formula with a worked example (Δ Immediate = +12, Δ Settled = −2 = textbook undercut)
 - Per-tab explanations of every chart and column
 - Key reference numbers (typical pit lane time, slow-stop threshold, 120s exclusion rule)
 
@@ -99,24 +101,45 @@ All data comes from the [OpenF1 API](https://openf1.org). Eight endpoints are us
 At the moment a car enters the pit lane, the engine finds the **car directly behind** in the race order and reads its interval — the gap from that car to the pitting driver. That gap is compared against the total time the pitting car will lose:
 
 ```
-net = gap_to_car_behind − (pit_duration + 20s pit lane traverse)
+net = gap_to_car_behind − (pit_duration + circuit_extra)
 ```
 
-The 20s pit lane traversal is a fixed estimate. It varies by circuit (Monaco is longer, Bahrain shorter) but is consistent enough for season-wide comparison.
+**`pit_duration`** (from OpenF1) is the full entry-to-exit time — it already includes pit lane traversal. **`circuit_extra`** is a small per-circuit penalty (1.5–4.5s) for in/out-lap speed delta that falls outside the measured stop window. Monaco adds ~4s; Spa ~1.5s; average ~3s.
 
 | Score | Condition | Meaning |
 |---|---|---|
 | **SAFE** | net > +5s | Emerged ahead with a comfortable margin |
 | **MARGINAL** | 0 < net ≤ 5s | Emerged ahead, but razor-thin — any hesitation costs position |
-| **DANGEROUS** | net ≤ 0 | Gap did not cover the pit lane time — emerged behind on paper |
+| **RISKY** | net ≤ 0, gap ≥ 50% of total cost | Gap short, but not catastrophically so — rival pitting likely neutralises |
+| **CRITICAL** | net ≤ 0, gap < 50% of total cost | Gap nowhere near sufficient — position loss likely regardless of rival's strategy |
 | **UNKNOWN** | no gap data | Race leader (gap = 0), or interval data unavailable |
 
 **Gap measurement method:**
 - **Measured** (~86% of stops): gap read directly from the car at position+1 at pit entry
 - **Estimated** (~14%): pitting driver's own interval used instead — happens at the back of the field or when position data is missing
-- Race leaders' own interval is 0 (they have no car ahead to measure against), so their stops are scored UNKNOWN rather than DANGEROUS
+- Race leaders' own interval is 0 (they have no car ahead to measure against), so their stops are scored UNKNOWN rather than CRITICAL
 
-**Key insight:** In 2023–2025, approximately 95% of all pit stops score DANGEROUS by this formula. That is not a flaw — it reflects how F1 strategy actually works. Most pit stops are made when the gap is not sufficient to cover the pit lane time on its own. Teams take that risk because they expect the car behind to also pit. This dashboard scores each stop in isolation: if the rival stays out, does the stop work?
+**Key insight:** Most F1 pit stops score RISKY or CRITICAL — this is by design. F1 strategy is built on the expectation that rivals will also pit. This dashboard scores each stop in isolation: if the rival stays out, does the gap hold? CRITICAL means the gap was genuinely unworkable — not just a normal strategic gamble.
+
+---
+
+## How Position Delta Is Measured
+
+Most analytics tools measure position change from "the lap before" to "the lap after" pitting. That produces misleading numbers — the first position reading after pit **entry** captures the driver still physically in the pit lane, so every stop looks like a catastrophic loss.
+
+This dashboard anchors both windows to **pit exit**, not pit entry, and reports two deltas per stop:
+
+| Column | Definition |
+|---|---|
+| **Pos Before** | Last position reading ≥60s before pit entry — stable reference, avoids in-lap noise |
+| **Δ Immediate** | First position reading after **pit exit** — shows the traffic hole the stop creates. Almost always positive (loss). This is the normal pit lane effect, not an outcome metric |
+| **Pos Settled (~3 laps)** | Position ~270s after pit exit (~3 laps at 90s avg). Traffic cleared, tyre advantage registers |
+| **Δ Settled** | Net positions gained or lost at the settled window. **This is the real outcome.** Positive = fell back, negative = gained |
+| **Cost Score** | `Δ Settled − expected_Δ_Settled[risk_level]`. Season average Δ Settled per risk level is the baseline. Measures how much worse (or better) the stop was vs what normally happens at that timing window |
+
+The 270-second settled window is the established standard in F1 analytics (FastF1 / Agastya Bassi, confirmed by F1_Strat_Manager N16 with MAX_LAP_GAP=5). Undercut success is defined at lap Y+3 after the rival also pits — the same window used here.
+
+**Cost Score example:** A DANGEROUS stop is expected to lose ~1–2 positions on average (the undercut usually recovers). A stop with Δ Immediate = +15 and Δ Settled = +12 has Cost Score ≈ +10 — 10 positions worse than the DANGEROUS baseline. That is a genuinely failed strategy call, not normal pit traffic.
 
 ---
 
@@ -131,28 +154,43 @@ fetcher.py
 
 analyzer.py
   Computes team stop duration stats (median, mean, std dev, p95, slow-stop rate)
-  and position delta per stop (position 1 lap before vs. 3 laps after pitting).
-  Outputs stop_outcomes_{year}.csv.
+  and dual position delta per stop:
+    - Δ Immediate: first reading after pit EXIT (not entry), captures the traffic hole
+    - Δ Settled: position ~270s (~3 laps) after pit exit, when tyre advantage registers
+  Pos Before is anchored ≥60s before entry for stability. Standard F1 analytics window
+  (FastF1 / Agastya Bassi research). Outputs stop_outcomes_{year}.csv.
+
+  Cost Score (computed in app.py at runtime):
+    cost_score = Δ Settled − expected_Δ_Settled[risk_level]
+  expected_Δ_Settled is the season mean for each risk level (SAFE / MARGINAL / DANGEROUS).
+  Ranks stops by how much worse they were vs what normally happens at that timing window —
+  not just raw positions lost, which conflates normal pit lane effects with real failures.
 
 risk.py
   Core scoring engine. For each stop:
     1. Finds the car at position+1 using the position timeline
     2. Reads that car's interval at pit entry time (Measured method)
     3. Falls back to pitting driver's own interval if position data is missing
-    4. Computes net gap and assigns SAFE / MARGINAL / DANGEROUS / UNKNOWN
+    4. Computes net gap and assigns SAFE / MARGINAL / RISKY / CRITICAL / UNKNOWN
+       Formula: net = gap − (pit_duration + circuit_extra)
+       pit_duration is full entry-to-exit time from OpenF1 (no extra traversal constant).
+       circuit_extra is a per-circuit in/out-lap penalty from a 30-circuit lookup table.
     5. Joins tyre compound and age from stints data
-    6. Finds the nearest team radio clip within 2 minutes for dangerous stops
+    6. Finds the nearest team radio clip within 2 minutes for RISKY/CRITICAL stops
   Outputs risk_scores_{year}.csv.
 
 app.py
   Streamlit dashboard. 4 tabs with Plotly charts. Features:
     - Team hex colours from OpenF1 applied to all charts
-    - Driver headshots from OpenF1 in Costliest Stops
+    - Driver headshots from OpenF1 in Tab 2 and Tab 3
     - Weather annotations (rainfall, track temp) on Race Timeline
     - Column tooltips on every table via st.column_config
-    - Story cards on radio clips: net gap, emergence direction, positions lost
+    - Story cards on radio clips: net gap, emergence direction, positions lost (settled); shown for RISKY/CRITICAL stops
     - Sidebar year selector (2023 / 2024 / 2025) and team filter
     - Box plot capped at 120s (red flag / drive-through stops excluded from view)
+    - Tab 3 leaderboard: ranked by Cost Score, 9-column layout with headshots
+    - Cost Score computed at runtime: season baseline per risk level joined at load time
+    - Final Pos column in positions gained table — confirms whether undercut held to flag
 ```
 
 ---
@@ -162,20 +200,20 @@ app.py
 ### 2025 (30 races, 867 stops)
 - **Ferrari fastest**: 22.9s median — edged Red Bull by 0.1s for the first time
 - **Haas highest slow-stop rate**: 14.1% of stops exceeded 30s
-- 9 SAFE windows, 4 MARGINAL, 842 DANGEROUS, 12 UNKNOWN
+- 64 SAFE, 39 MARGINAL, 93 RISKY, 659 CRITICAL, 12 UNKNOWN
 - Measured gap coverage: 85.0%
 
 ### 2024 (30 races, 865 stops)
 - **Red Bull fastest**: 22.9s median
 - **Kick Sauber highest slow-stop rate**: 21.7%
-- 32 SAFE windows, 5 MARGINAL, 818 DANGEROUS, 10 UNKNOWN
+- 75 SAFE, 46 MARGINAL, 106 RISKY, 628 CRITICAL, 10 UNKNOWN
 - Medium compound: 48.6% of all stops
 - Measured gap coverage: 86.0%
 
 ### 2023 (29 races, 717 stops)
 - **Red Bull fastest**: 23.2s median
 - **Williams highest slow-stop rate**: 20.3%
-- 15 SAFE windows, 2 MARGINAL, 698 DANGEROUS, 2 UNKNOWN
+- 40 SAFE, 39 MARGINAL, 59 RISKY, 577 CRITICAL, 2 UNKNOWN
 - Medium compound: 43.0% of all stops
 - Measured gap coverage: 87.6%
 
